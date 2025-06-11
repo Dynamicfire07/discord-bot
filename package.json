@@ -1,0 +1,27 @@
+{
+  "name": "discord-bot-ib",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Dynamicfire07/discord-bot-ib.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Dynamicfire07/discord-bot-ib/issues"
+  },
+  "homepage": "https://github.com/Dynamicfire07/discord-bot-ib#readme",
+  "dependencies": {
+    "better-sqlite3": "^11.10.0",
+    "discord.js": "^14.19.3",
+    "dotenv": "^16.5.0",
+    "groq-sdk": "^0.23.0",
+    "pdf-parse": "^1.1.1"
+  }
+}

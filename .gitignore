@@ -1,0 +1,21 @@
+# Node dependencies
+node_modules/
+
+# Environment variables
+.env
+
+# Local databases (old SQLite and data folders, just in case)
+*.db
+data/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# IDE config files
+.vscode/
+.idea/
