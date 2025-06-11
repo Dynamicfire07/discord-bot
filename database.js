@@ -1,45 +1,62 @@
 // database.js
-const path = require('path');
-const Database = require('better-sqlite3');
+const { MongoClient, ObjectId } = require('mongodb');
 require('dotenv').config();
 
+const uri = process.env.MONGO_URI;
+const client = new MongoClient(uri);
 
+let dbInstance = null;
 
-// Initialize DB in ./data/bot.db
-const dbPath = path.join(__dirname, 'data', 'bot.db');
-const db = new Database(dbPath);
+async function connect() {
+    if (dbInstance) return dbInstance;
 
-// USERS table
-db.prepare(`
-CREATE TABLE IF NOT EXISTS users (
-    id TEXT PRIMARY KEY,
-    username TEXT
-);`).run();
+    await client.connect();
+    dbInstance = client.db('discord-bot-ib');
+    return dbInstance;
+}
 
-// SUBJECTS table
-db.prepare(`
-CREATE TABLE IF NOT EXISTS subjects (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT UNIQUE
-);`).run();
+async function createSubject(name) {
+    const db = await connect();
+    const subjects = db.collection('subjects');
+    const existing = await subjects.findOne({ name });
+    if (!existing) {
+        await subjects.insertOne({ name });
+    }
+}
 
-// USER_SUBJECTS table (many-to-many)
-db.prepare(`
-CREATE TABLE IF NOT EXISTS user_subjects (
-    user_id TEXT,
-    subject_id INTEGER,
-    PRIMARY KEY (user_id, subject_id),
-    FOREIGN KEY (user_id) REFERENCES users(id),
-    FOREIGN KEY (subject_id) REFERENCES subjects(id)
-);`).run();
+async function createUser(userId, username) {
+    const db = await connect();
+    const users = db.collection('users');
+    await users.updateOne(
+        { _id: userId },
+        { $set: { username, subjects: [] } },
+        { upsert: true }
+    );
+}
 
-db.prepare(`
-CREATE TABLE IF NOT EXISTS tests (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    subject_id INTEGER,
-    date TEXT,
-    portion TEXT,
-    FOREIGN KEY (subject_id) REFERENCES subjects(id)
-);`).run();
+async function addSubjectToUser(userId, subjectId) {
+    const db = await connect();
+    const users = db.collection('users');
+    await users.updateOne(
+        { _id: userId },
+        { $addToSet: { subjects: new ObjectId(subjectId) } }
+    );
+}
 
-module.exports = db;
+async function createTest(subjectId, date, portion) {
+    const db = await connect();
+    const tests = db.collection('tests');
+    await tests.insertOne({
+        subject_id: new ObjectId(subjectId),
+        date: new Date(date),
+        portion
+    });
+}
+
+module.exports = {
+    connect,
+    createSubject,
+    createUser,
+    addSubjectToUser,
+    createTest
+};

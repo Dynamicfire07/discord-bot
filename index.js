@@ -2,7 +2,8 @@
 require('dotenv').config(); // Load environment variables from .env file
 const fs = require('fs');
 const path = require('path');
-const db = require('./database');
+const database = require('./database');
+const { ObjectId } = require('mongodb');
 const {
     Client,
     Events,
@@ -76,68 +77,66 @@ client.on(Events.InteractionCreate, async interaction => {
             });
         } else if (commandName === 'viewprofile') {
             const user = interaction.options.getUser('user');
-            const getSubjects = db.prepare(`
-                SELECT s.name FROM subjects s
-                JOIN user_subjects us ON s.id = us.subject_id
-                WHERE us.user_id = ?
-            `);
-            const subjects = getSubjects.all(user.id).map(row => row.name);
-
-            if (!subjects || subjects.length === 0) {
+            const db = await database.connect();
+            const usersCollection = db.collection('users');
+            const subjectsCollection = db.collection('subjects');
+            
+            const userData = await usersCollection.findOne({ _id: user.id });
+            if (!userData || !userData.subjects || userData.subjects.length === 0) {
                 return interaction.reply({
                     content: `${user} hasn't created a profile.`,
                     ephemeral: false
                 });
             }
-
+            
+            const subjectIds = userData.subjects.map(id => new ObjectId(id));
+            const subjects = await subjectsCollection.find({ _id: { $in: subjectIds } }).toArray();
+            const subjectNames = subjects.map(s => s.name);
+        
             const { EmbedBuilder } = require('discord.js');
             const embed = new EmbedBuilder()
                 .setTitle(`${user.username}'s Subject Profile`)
-                .setDescription(subjects.map((s, i) => `**${i + 1}.** ${s}`).join('\n'))
+                .setDescription(subjectNames.map((s, i) => `**${i + 1}.** ${s}`).join('\n'))
                 .setColor(0x1abc9c);
-
+        
             return interaction.reply({ embeds: [embed] });
         } else if (commandName === 'test-add') {
             const subject = interaction.options.getString('subject');
-            const dateStr = interaction.options.getString('date'); // Expected format: dd/mm/yyyy
+            const dateStr = interaction.options.getString('date');
             const portion = interaction.options.getString('portion');
 
             const [day, month, year] = dateStr.split('/').map(Number);
-            const testDate = new Date(year, month - 1, day, 9); // Default to 9AM
+            const testDate = new Date(year, month - 1, day, 9);
 
             if (isNaN(testDate)) {
                 return interaction.reply({ content: 'Invalid date format. Use dd/mm/yyyy.', ephemeral: true });
             }
 
-            // Ensure subject exists
-            const getSubject = db.prepare('SELECT id FROM subjects WHERE name = ?');
-            const insertSubject = db.prepare('INSERT INTO subjects (name) VALUES (?)');
-            let subjectRow = getSubject.get(subject);
-            if (!subjectRow) {
-                const allSubjects = db.prepare('SELECT name FROM subjects').all().map(row => row.name);
-                if (!allSubjects.includes(subject)) {
+            const db = await database.connect();
+            const subjectsCollection = db.collection('subjects');
+            let subjectDoc = await subjectsCollection.findOne({ name: subject });
+
+            if (!subjectDoc) {
+                const allSubjects = await subjectsCollection.find().toArray();
+                const subjectNames = allSubjects.map(s => s.name);
+                if (!subjectNames.includes(subject)) {
                     return interaction.reply({
-                        content: `Subject **${subject}** not found.\nAvailable subjects:\n- ${allSubjects.join('\n- ')}`,
+                        content: `Subject **${subject}** not found.\nAvailable subjects:\n- ${subjectNames.join('\n- ')}`,
                         ephemeral: true
                     });
                 }
-                insertSubject.run(subject);
-                subjectRow = getSubject.get(subject);
+                await subjectsCollection.insertOne({ name: subject });
+                subjectDoc = await subjectsCollection.findOne({ name: subject });
             }
 
-            // Insert test
-            db.prepare('INSERT INTO tests (subject_id, date, portion) VALUES (?, ?, ?)').run(subjectRow.id, testDate.toISOString(), portion);
+            await database.createTest(subjectDoc._id, testDate, portion);
             await interaction.reply({ content: `Test for **${subject}** added on **${dateStr}**.\nPortion: ${portion}`, ephemeral: false });
 
-            const getUsersForSubject = db.prepare(`
-                SELECT u.id FROM users u
-                JOIN user_subjects us ON u.id = us.user_id
-                WHERE us.subject_id = ?
-            `);
-            const userRows = getUsersForSubject.all(subjectRow.id);
-            const userMentions = userRows.map(u => `<@${u.id}>`).join(', ');
+            const usersCollection = db.collection('users');
+            const usersForSubject = await usersCollection.find({ subjects: subjectDoc._id }).toArray();
+            const userMentions = usersForSubject.map(u => `<@${u._id}>`).join(', ');
 
-            const reminders = [-7, -3, -2, -1, 0]; // days before
+            const reminders = [-7, -3, -2, -1, 0];
             reminders.forEach(daysBefore => {
                 const reminderDate = new Date(testDate);
                 reminderDate.setDate(reminderDate.getDate() + daysBefore);
@@ -153,29 +152,15 @@ client.on(Events.InteractionCreate, async interaction => {
                 }
             });
         } else if (commandName === 'test-list') {
-            // Fetch all upcoming tests with subject info
-            const tests = db.prepare(`
-                SELECT t.id, t.date, t.portion, s.id AS subject_id, s.name AS subject
-                FROM tests t
-                JOIN subjects s ON t.subject_id = s.id
-                ORDER BY t.date ASC
-            `).all();
+            const db = await database.connect();
+            const testsCollection = db.collection('tests');
+            const subjectsCollection = db.collection('subjects');
+            const usersCollection = db.collection('users');
+
+            const tests = await testsCollection.find().sort({ date: 1 }).toArray();
 
             if (tests.length === 0) {
                 return interaction.reply({ content: 'No upcoming tests found.', ephemeral: true });
-            }
-
-            // Get all user-subject links at once for efficient mapping
-            const userSubjectLinks = db.prepare(`
-                SELECT us.subject_id, u.id as user_id
-                FROM user_subjects us
-                JOIN users u ON u.id = us.user_id
-            `).all();
-            // Build a mapping from subject_id to array of user_ids
-            const subjectToUsers = {};
-            for (const row of userSubjectLinks) {
-                if (!subjectToUsers[row.subject_id]) subjectToUsers[row.subject_id] = [];
-                subjectToUsers[row.subject_id].push(row.user_id);
             }
 
             const { EmbedBuilder } = require('discord.js');
@@ -183,9 +168,14 @@ client.on(Events.InteractionCreate, async interaction => {
                 .setTitle(`📅 Upcoming Tests`)
                 .setColor(0x7289da);
 
-            tests.forEach((test, i) => {
-                const userIds = subjectToUsers[test.subject_id] || [];
-                const mentions = userIds.length > 0 ? userIds.map(uid => `<@${uid}>`).join(', ') : 'No one assigned';
+            for (let i = 0; i < tests.length; i++) {
+                const test = tests[i];
+                const subject = await subjectsCollection.findOne({ _id: new ObjectId(test.subject_id) });
+
+                const usersForSubject = await usersCollection.find({ subjects: subject._id }).toArray();
+                const mentions = usersForSubject.length > 0 
+                    ? usersForSubject.map(u => `<@${u._id}>`).join(', ')
+                    : 'No one assigned';
 
                 const testDate = new Date(test.date);
                 const formattedDate = testDate.toLocaleDateString('en-GB', {
@@ -193,10 +183,10 @@ client.on(Events.InteractionCreate, async interaction => {
                 });
 
                 embed.addFields({
-                    name: `${i + 1}. ${test.subject} — ${formattedDate}`,
+                    name: `${i + 1}. ${subject.name} — ${formattedDate}`,
                     value: `**Portion**: ${test.portion}\n**Students**: ${mentions}`,
                 });
-            });
+            }
 
             await interaction.reply({ embeds: [embed] });
         } else if (commandName === 'pomdorro') {
@@ -336,10 +326,45 @@ client.on(Events.InteractionCreate, async interaction => {
 
                 const summary = completion.choices[0]?.message?.content || "Unable to summarize.";
 
-                await interaction.editReply(`📝 **Summary:**\n${summary}`);
+                if (summary.length <= 2000) {
+                    await interaction.editReply(`📝 **Summary:**\n${summary}`);
+                } else {
+                    await interaction.editReply('📝 **Summary too long. Splitting into parts:**');
+                    const parts = summary.match(/[\s\S]{1,1900}/g);
+                    for (const part of parts) {
+                        await interaction.followUp(part);
+                    }
+                }
             } catch (err) {
                 console.error(err);
                 await interaction.editReply('❌ Failed to process the file.');
+            }
+        } else if (commandName === 'explain') {
+            const question = interaction.options.getString('question');
+            await interaction.reply('🧠 Thinking...');
+            try {
+                const completion = await groq.chat.completions.create({
+                    messages: [
+                        { role: "system", content: "You are a helpful tutor that explains concepts in simple, clear language for students." },
+                        { role: "user", content: `Explain: ${question}` }
+                    ],
+                    model: "llama-3.3-70b-versatile",
+                });
+
+                const answer = completion.choices[0]?.message?.content || "I'm unable to explain that right now.";
+
+                if (answer.length <= 2000) {
+                    await interaction.editReply(`📚 **Explanation:**\n${answer}`);
+                } else {
+                    await interaction.editReply('📚 **Explanation too long. Splitting into parts:**');
+                    const parts = answer.match(/[\s\S]{1,1900}/g);
+                    for (const part of parts) {
+                        await interaction.followUp(part);
+                    }
+                }
+            } catch (err) {
+                console.error(err);
+                await interaction.editReply('❌ Failed to generate explanation.');
             }
         }
     } else if (interaction.isStringSelectMenu()) {
@@ -348,23 +373,21 @@ client.on(Events.InteractionCreate, async interaction => {
             const username = interaction.user.tag;
             const selectedSubjects = interaction.values;
 
-            // Insert or update user
-            db.prepare('INSERT OR REPLACE INTO users (id, username) VALUES (?, ?)').run(userId, username);
-
-            // Clear previous subjects
-            db.prepare('DELETE FROM user_subjects WHERE user_id = ?').run(userId);
-
-            const getSubjectId = db.prepare('SELECT id FROM subjects WHERE name = ?');
-            const insertSubject = db.prepare('INSERT INTO subjects (name) VALUES (?)');
-            const linkUserSubject = db.prepare('INSERT OR IGNORE INTO user_subjects (user_id, subject_id) VALUES (?, ?)');
+            await database.createUser(userId, username);
+            const db = await database.connect();
+            const subjectsCollection = db.collection('subjects');
+            const usersCollection = db.collection('users');
 
             for (const subject of selectedSubjects) {
-                let row = getSubjectId.get(subject);
-                if (!row) {
-                    insertSubject.run(subject);
-                    row = getSubjectId.get(subject);
+                let subjectDoc = await subjectsCollection.findOne({ name: subject });
+                if (!subjectDoc) {
+                    await subjectsCollection.insertOne({ name: subject });
+                    subjectDoc = await subjectsCollection.findOne({ name: subject });
                 }
-                linkUserSubject.run(userId, row.id);
+                await usersCollection.updateOne(
+                    { _id: userId },
+                    { $addToSet: { subjects: subjectDoc._id } }
+                );
             }
 
             await interaction.update({ content: 'Profile saved!', components: [] });
