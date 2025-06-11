@@ -7,3 +7,4 @@ Run `/profile` to choose your IB subjects. Your selections are stored in
 # bot-hosting
 # bot-hosting
 # ib-bot
+# discord-bot
