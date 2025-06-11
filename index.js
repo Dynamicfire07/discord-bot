@@ -366,6 +366,64 @@ client.on(Events.InteractionCreate, async interaction => {
                 console.error(err);
                 await interaction.editReply('❌ Failed to generate explanation.');
             }
+        } else if (commandName === 'exam-plan') {
+            const userId = interaction.user.id;
+            const db = await database.connect();
+            const testsCollection = db.collection('tests');
+            const subjectsCollection = db.collection('subjects');
+            const usersCollection = db.collection('users');
+
+            const userData = await usersCollection.findOne({ _id: userId });
+            if (!userData || !userData.subjects || userData.subjects.length === 0) {
+                return interaction.reply({ content: 'You have no upcoming exams scheduled.', ephemeral: true });
+            }
+
+            const subjects = await subjectsCollection.find({ _id: { $in: userData.subjects.map(id => new ObjectId(id)) } }).toArray();
+            const subjectMap = {};
+            subjects.forEach(sub => subjectMap[sub._id.toString()] = sub.name);
+
+            const tests = await testsCollection.find({ subject_id: { $in: userData.subjects } }).sort({ date: 1 }).toArray();
+
+            if (tests.length === 0) {
+                return interaction.reply({ content: 'You have no upcoming exams scheduled.', ephemeral: true });
+            }
+
+            const today = new Date();
+            const examInfo = tests.map(test => {
+                const examDate = new Date(test.date);
+                const examDateStr = examDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+                const subjectName = subjectMap[test.subject_id.toString()] || 'Unknown Subject';
+                return `${subjectName} on ${examDateStr} for ${test.portion}`;
+            }).join(', ');
+
+            const prompt = `${interaction.user.username} has upcoming exams: ${examInfo}. Today is ${today.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}. You are a smart assistant who will help him make a timetable to efficiently approach the exams to make sure he gets a good grade and what he should study. You should provide a list of what he should study on each day till the final day. The day before the exam should only focus on that subject. Your response should be straight to the point with no extra fluff.`;
+
+            await interaction.reply('🗓️ Generating your study plan...');
+
+            try {
+                const completion = await groq.chat.completions.create({
+                    messages: [
+                        { role: "system", content: "You are an efficient AI study planner." },
+                        { role: "user", content: prompt }
+                    ],
+                    model: "llama-3.3-70b-versatile",
+                });
+
+                const plan = completion.choices[0]?.message?.content || "Unable to generate a study plan.";
+
+                if (plan.length <= 2000) {
+                    await interaction.editReply(`🗓️ **Study Plan:**\n${plan}`);
+                } else {
+                    await interaction.editReply('🗓️ **Study Plan too long. Splitting into parts:**');
+                    const parts = plan.match(/[\s\S]{1,1900}/g);
+                    for (const part of parts) {
+                        await interaction.followUp(part);
+                    }
+                }
+            } catch (err) {
+                console.error(err);
+                await interaction.editReply('❌ Failed to generate study plan.');
+            }
         }
     } else if (interaction.isStringSelectMenu()) {
         if (interaction.customId === 'subject-select') {
