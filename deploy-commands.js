@@ -102,6 +102,30 @@ const commands = [
     {
         name: 'exam-plan',
         description: 'Generate an AI-powered study plan based on your upcoming exams.'
+    },
+    {
+        name: 'deadline',
+        description: 'Add a deadline for a subject.',
+        options: [
+            {
+                name: 'subject',
+                type: 3, // STRING
+                description: 'Subject name',
+                required: true
+            },
+            {
+                name: 'work',
+                type: 3, // STRING
+                description: 'Work or assignment description',
+                required: true
+            },
+            {
+                name: 'date',
+                type: 3, // STRING
+                description: 'Deadline date (dd/mm/yyyy)',
+                required: true
+            }
+        ]
     }
 ];
 // Grab the Bot Token, Client ID, and Guild ID from the .env file

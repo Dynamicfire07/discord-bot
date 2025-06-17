@@ -53,10 +53,21 @@ async function createTest(subjectId, date, portion) {
     });
 }
 
+async function createDeadline(subjectId, work, date) {
+    const db = await connect();
+    const deadlines = db.collection('deadlines');
+    await deadlines.insertOne({
+        subject_id: new ObjectId(subjectId),
+        work: work,
+        date: new Date(date)
+    });
+}
+
 module.exports = {
     connect,
     createSubject,
     createUser,
     addSubjectToUser,
-    createTest
+    createTest,
+    createDeadline
 };

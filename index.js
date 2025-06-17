@@ -366,6 +366,84 @@ client.on(Events.InteractionCreate, async interaction => {
                 console.error(err);
                 await interaction.editReply('❌ Failed to generate explanation.');
             }
+        } else if (commandName === 'deadline') {
+            const subject = interaction.options.getString('subject');
+            const work = interaction.options.getString('work');
+            const dateStr = interaction.options.getString('date');
+
+            const [day, month, year] = dateStr.split('/').map(Number);
+            const deadlineDate = new Date(year, month - 1, day);
+
+            if (isNaN(deadlineDate)) {
+                return interaction.reply({ content: 'Invalid date format. Use dd/mm/yyyy.', ephemeral: true });
+            }
+
+            const db = await database.connect();
+            const subjectsCollection = db.collection('subjects');
+            const deadlinesCollection = db.collection('deadlines');
+
+            const subjectDoc = await subjectsCollection.findOne({ name: subject });
+
+            if (!subjectDoc) {
+                const allSubjects = await subjectsCollection.find().toArray();
+                const subjectNames = allSubjects.map(s => s.name);
+                return interaction.reply({
+                    content: `Subject **${subject}** not found.\nAvailable subjects:\n- ${subjectNames.join('\n- ')}`,
+                    ephemeral: true
+                });
+            }
+
+            await deadlinesCollection.insertOne({
+                subject_id: subjectDoc._id,
+                work: work,
+                date: deadlineDate,
+                user_id: interaction.user.id
+            });
+
+            await interaction.reply({ content: `✅ Deadline for **${subject}** added:\n**Work:** ${work}\n**Due Date:** ${dateStr}` });
+
+            // Schedule reminders at 7, 2, and 1 days before the deadline
+            const user = interaction.user;
+            const reminders = [-7, -2, -1]; // days before
+            reminders.forEach(daysBefore => {
+                const reminderDate = new Date(deadlineDate);
+                reminderDate.setDate(reminderDate.getDate() + daysBefore);
+                const msUntilReminder = reminderDate.getTime() - Date.now();
+                if (msUntilReminder > 0) {
+                    setTimeout(() => {
+                        interaction.channel.send({
+                            content: `${user}\n⏰ Reminder: You have an upcoming deadline for **${subject}** due on **${dateStr}**.\n📄 Work: ${work}`
+                        });
+                    }, msUntilReminder);
+                }
+            });
+        } else if (commandName === 'deadline-list') {
+            const db = await database.connect();
+            const deadlinesCollection = db.collection('deadlines');
+            const subjectsCollection = db.collection('subjects');
+
+            const userId = interaction.user.id;
+            const deadlines = await deadlinesCollection.find({ user_id: userId }).sort({ date: 1 }).toArray();
+            if (deadlines.length === 0) {
+                return interaction.reply({ content: 'No deadlines found.', ephemeral: true });
+            }
+
+            const { EmbedBuilder } = require('discord.js');
+            const embed = new EmbedBuilder().setTitle('📌 Upcoming Deadlines').setColor(0x3498db);
+
+            for (let i = 0; i < deadlines.length; i++) {
+                const deadline = deadlines[i];
+                const subject = await subjectsCollection.findOne({ _id: new ObjectId(deadline.subject_id) });
+                const deadlineDate = new Date(deadline.date);
+                const formattedDate = deadlineDate.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
+
+                embed.addFields({
+                    name: `${i + 1}. ${subject.name} — ${formattedDate}`,
+                    value: `**Work:** ${deadline.work}`,
+                });
+            }
+
+            await interaction.reply({ embeds: [embed] });
         } else if (commandName === 'exam-plan') {
             const userId = interaction.user.id;
             const db = await database.connect();
